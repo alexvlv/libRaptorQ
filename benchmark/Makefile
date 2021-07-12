@@ -51,6 +51,7 @@ MODIFIED:=$(shell $(TOPDIR)/scripts/getgitmodified.sh "$(MAKEFILE_DIR)")
 
 CFLAGS := -std=gnu++11 -O3 -DNDEBUG
 CFLAGS += -Wall -Wno-unknown-pragmas
+CFLAGS += -Wno-int-in-bool-context
 CFLAGS += -DREVISION="$(REVISION)$(MODIFIED) $(BRANCH)" 
 CFLAGS += -DREVDATE="$(REVDATE)"
 
