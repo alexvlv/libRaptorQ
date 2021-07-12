@@ -69,6 +69,14 @@ VPATH := $(source_dirs) $(include_dirs)
 
 all: install
 
+.PHONY: mips
+mips:
+	$(MAKE) all ARCH=mips
+
+.PHONY: x86
+x86:
+	$(MAKE) all ARCH=x86
+
 install: $(BINARY)
 	@echo Install $^ binaries to $(INSTALLDIR)
 	$(QUIET) install -d $(INSTALLDIR); install $^ $(INSTALLDIR)
@@ -94,7 +102,7 @@ clean:
 
 .PHONY: distclean
 distclean:
-	$(QUIET) rm -f  $(PROJECT)-*; rm -f -r obj*;
+	$(QUIET) rm -f  $(PROJECT)-x86* $(PROJECT)-mips*; rm -f -r obj*;
 
 
 
