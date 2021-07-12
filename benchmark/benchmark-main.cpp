@@ -1,3 +1,4 @@
+// $Id$
 /*
  * Copyright (c) 2015-2018, Luca Fulchir<luker@fenrirproject.org>,
  * All rights reserved.
@@ -27,6 +28,7 @@
 #include <random>
 #include <stdlib.h>
 #include <vector>
+#include <chrono>
 
 // Demonstration of how to use the C++ RAW interface
 // it's pretty simple, we generate some input,
@@ -37,6 +39,26 @@
 // rename the main namespace for ease of use
 namespace RaptorQ = RaptorQ__v1;
 
+// Benchmark stuff:
+// From src/cli/RaptorQ.cpp
+class Timer {
+public:
+    Timer() {}
+    Timer (const Timer&) = delete;
+    Timer& operator= (const Timer&) = delete;
+    Timer (Timer&&) = delete;
+    Timer& operator= (Timer&&) = delete;
+    void start()
+        { t0 = std::chrono::high_resolution_clock::now(); }
+    std::chrono::microseconds stop ()
+    {
+        auto t1 = std::chrono::high_resolution_clock::now();
+        auto diff = t1 - t0;
+        return std::chrono::duration_cast<std::chrono::microseconds> (diff);
+    }
+private:
+    std::chrono::time_point<std::chrono::high_resolution_clock> t0;
+};
 
 // mysize is bytes.
 bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
@@ -58,7 +80,9 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
     // the actual input.
     std::vector<uint8_t> input;
     input.reserve (mysize);
+    Timer time;
 
+    time.start();
     // initialize vector with random data
     // distr should be "uint8_t". But visual studio does not like it, so
     // we use uint16_t
@@ -70,7 +94,7 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
     for (size_t idx = 0; idx < mysize; ++idx) {
         input.push_back (static_cast<uint8_t> (distr(rnd)));
     }
-
+    std::cout << "Create random data: " << time.stop().count() << " us" << std::endl;
 
     // the input will be divided in blocks of 4 bytes.
     // it's a bit low, but this is just an example.
@@ -120,7 +144,7 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
                                 static_cast<uint32_t> (_symbols) <<
                                 " symbol size: " <<
                                 static_cast<int32_t>(enc.symbol_size()) << "\n";
-
+	time.start();
     // RQ need to do its magic on the input before you can ask the symbols.
     // multiple ways to do this are available.
     // The simplest is to run the computation and block everything until
@@ -133,13 +157,14 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
         std::cout << "Enc-RaptorQ failure! really bad!\n";
         return false;
     }
+    std::cout << "Encode: " << time.stop().count()/1000 << " ms" << std::endl;
 
 
     // the probability that a symbol will be dropped.
     if (drop_probability > static_cast<float> (90.0))
         drop_probability = 90.0;   // this is still too high probably.
 
-
+    time.start();
     // we will store here all encoded and transmitted symbols
     // std::pair<symbol id (esi), symbol data>
     using symbol_id = uint32_t; // just a better name
@@ -195,7 +220,9 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
         std::cout << "Source Packet lost: " << enc.symbols() - received.size()
                                                                         << "\n";
 
+        std::cout << "Source Packet lost: " << time.stop().count()/1000 << " ms" << std::endl;
 
+        time.start();
         //--------------------------------------------
         // we finished working with the source symbols.
         // now we need to transmit the repair symbols.
@@ -248,11 +275,11 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
             return false;
         }
     }
-
+    std::cout << "Receive: " << time.stop().count()/1000 << " ms" << std::endl;
     // Now we all the source and repair symbols are in "received".
     // we will use those to start decoding:
 
-
+    time.start();
     // define "Decoder_type" to write less afterwards
     using Decoder_type = RaptorQ::Decoder<
                                     typename std::vector<uint8_t>::iterator,
@@ -289,7 +316,9 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
             return false;
         }
     }
+    std::cout << "Push every received symbol into the decoder: " << time.stop().count()/1000 << " ms" << std::endl;
 
+    time.start();
     // by now we now there will be no more input, so we tell this to the
     // decoder. You can skip this call, but if the decoder does not have
     // enough data it sill wait forever (or until you call .stop())
@@ -319,7 +348,6 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
     // which size does not align with the output. For really advanced usage only
     // Both should be zero for most setups.
 
-
     if (decoded.written != mysize) {
         if (decoded.written == 0) {
             // we were really unlucky and the RQ algorithm needed
@@ -335,6 +363,7 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
     } else {
         std::cout << "Decoded: " << mysize << "\n";
     }
+	std::cout << "Decode: " << time.stop().count()/1000 << " ms" << std::endl;
 
     // byte-wise check: did we actually decode everything the right way?
     for (uint64_t i = 0; i < mysize; ++i) {
