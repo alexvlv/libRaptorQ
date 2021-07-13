@@ -73,7 +73,7 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
 //  overhead 2 => 0.0001% failures
 // etc... as you can see, it make little sense to work with more than 3-4
 // overhead symbols, but at least one should be considered
-bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
+bool test_rq (const uint32_t mysize, const uint16_t symbol_size, std::mt19937_64 &rnd,
                                                         float drop_probability,
                                                         const uint8_t overhead)
 {
@@ -100,7 +100,7 @@ bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
     // it's a bit low, but this is just an example.
     // NOTE: the symbol size must be a multiple of the container size.
     //  since sizeof(uint8_t) == 1 and 4 is a multiple of 1, we are safe.
-    const uint16_t symbol_size = 4; // bytes
+    //const uint16_t symbol_size = 4; // bytes
 
 
     // how many symbols do we need to encode all our input in a single block?
@@ -394,10 +394,11 @@ int main (void)
 
     // for our test, we use an input of random size, between 100 and 10.000
     // bytes.
-    std::uniform_int_distribution<uint32_t> distr(100, 10000);
-    uint32_t input_size = distr (rnd);
+    //std::uniform_int_distribution<uint32_t> distr(100, 10000);
+    //uint32_t input_size = distr (rnd);
+	uint32_t input_size = 40*1024;
 
-    if (!test_rq (input_size, rnd, 20.0, 4))
+    if (!test_rq (input_size, 62,rnd, 20.0, 4))
         return -1;
     std::cout << "The example completed successfully\n";
     return 0;
