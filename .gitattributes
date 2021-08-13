@@ -1,0 +1,14 @@
+* text=auto
+
+*.txt ident
+*.md ident
+*.md export-subst
+*.md text
+*.sh ident
+*.mk ident
+*.c* ident
+*.h* ident
+*.py ident
+*.pro ident
+*.proto ident
+Makefile ident
