@@ -1,5 +1,6 @@
-// $Id$
 /*
+ * $Id$
+ * 
  * Copyright (c) 2015-2018, Luca Fulchir<luker@fenrirproject.org>,
  * All rights reserved.
  *
@@ -30,62 +31,51 @@
 #include <random>
 #include <stdlib.h>
 #include <vector>
-
-// Demonstration of how to use the C++ RAW interface
-// it's pretty simple, we generate some input,
-// then encode, drop some packets (source and repair)
-// and finally decode everything.
-
+#include <cassert>
 
 // rename the main namespace for ease of use
 namespace RaptorQ = RaptorQ__v1;
 
-// mysize is bytes.
-bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
-                                                        float drop_probability,
-                                                        const uint8_t overhead);
-// the "overhead" variable tells us how many symbols more than the
-// minimum we will generate. RaptorQ can not always decode a block,
-// but there is a small probability that it will fail.
-// More overhead => less probability of failure
-//  overhead 0 => 1% failures
-//  overhead 1 => 0.01% failures
-//  overhead 2 => 0.0001% failures
-// etc... as you can see, it make little sense to work with more than 3-4
-// overhead symbols, but at least one should be considered
-bool test_rq (const uint32_t mysize, const uint16_t symbol_size, std::mt19937_64 &rnd,
-                                                        float drop_probability,
-                                                        const uint8_t overhead)
+using Binary = std::vector<uint8_t>;
+using symbol_id = uint32_t; // just a better name
+// we will store here all encoded and transmitted symbols
+// std::pair<symbol id (esi), symbol data>
+using Symbol = std::pair<symbol_id, Binary>;
+using Symbols = std::vector<Symbol>;
+
+using Encoder = RaptorQ::Encoder<typename Binary::iterator, typename Binary::iterator>;
+
+//-------------------------------------------------------------------------
+static std::mt19937_64& create_random_generator(void)
 {
-    // the actual input.
-    std::vector<uint8_t> input;
-    input.reserve (mysize);
-    Timer time;
+    // get a random number generator
+    static std::mt19937_64 rnd;
+    std::ifstream rand("/dev/urandom");
+    uint64_t seed = 0;
+    rand.read (reinterpret_cast<char *> (&seed), sizeof(seed));
+    rand.close ();
+    rnd.seed (seed);
+	return rnd;
+}
+//-------------------------------------------------------------------------
+// size is bytes.
+static Binary  generate_random_data(std::mt19937_64 &rnd,uint32_t size)
+{
+    Binary input;
+    input.reserve (size);
 
-    time.start();
-    // initialize vector with random data
-    // distr should be "uint8_t". But visual studio does not like it, so
-    // we use uint16_t
-    // generate a random distribution between all values of uint8_t
-    std::uniform_int_distribution<int16_t> distr (0,
-                                          std::numeric_limits<uint8_t>::max());
-
-    // fill our input with random data
-    for (size_t idx = 0; idx < mysize; ++idx) {
+    std::uniform_int_distribution<int16_t> distr (0, std::numeric_limits<uint8_t>::max());
+	for (size_t idx = 0; idx < size; ++idx) {
         input.push_back (static_cast<uint8_t> (distr(rnd)));
     }
-    std::cout << "Create random data: " << time.stop().count() << " us" << std::endl;
-
-    // the input will be divided in blocks of 4 bytes.
-    // it's a bit low, but this is just an example.
-    // NOTE: the symbol size must be a multiple of the container size.
-    //  since sizeof(uint8_t) == 1 and 4 is a multiple of 1, we are safe.
-    //const uint16_t symbol_size = 4; // bytes
-
-
+	return input;
+}
+//-------------------------------------------------------------------------
+static RaptorQ::Block_Size calc_symbols_per_block(size_t block_length, const uint16_t symbol_size)
+{
     // how many symbols do we need to encode all our input in a single block?
-    auto min_symbols = (input.size() * sizeof(uint8_t)) / symbol_size;
-    if ((input.size() * sizeof(uint8_t)) % symbol_size != 0)
+    auto min_symbols = (block_length * sizeof(uint8_t)) / symbol_size;
+    if ((block_length * sizeof(uint8_t)) % symbol_size != 0)
         ++min_symbols;
     // convert "symbols" to a typesafe equivalent, RaptorQ::Block_Size
     // This is needed becouse not all numbers are valid block sizes, and this
@@ -99,45 +89,117 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size, std::mt19937_64
             break;
         }
     }
-
-
-    // now initialize the encoder.
-    // the input for the encoder is std::vector<uint8_t>
-    // the output for the encoder is std::vector<uint8_t>
-    // yes, you can have different types, but most of the time you will
-    // want to work with uint8_t
-    RaptorQ::Encoder<typename std::vector<uint8_t>::iterator,
-                            typename std::vector<uint8_t>::iterator> enc (
-                                                            block, symbol_size);
-
-    // give the input to the encoder. the encoder answers with the size of what
-    // it can use
-    if (enc.set_data (input.begin(), input.end()) != mysize) {
-        std::cout << "Could not give data to the encoder :(\n";
-        return false;
-    }
-    // actual symbols. you could just use static_cast<uint16_t> (blok)
-    // but this way you can actually query the encoder.
-    uint16_t _symbols = enc.symbols();
-    // print some stuff in output
-    std::cout << "Size: " << mysize << " symbols: " <<
-                                static_cast<uint32_t> (_symbols) <<
+	return block;
+}
+//-------------------------------------------------------------------------
+// the "overhead" variable tells us how many symbols more than the
+// minimum we will generate. RaptorQ can not always decode a block,
+// but there is a small probability that it will fail.
+// More overhead => less probability of failure
+//  overhead 0 => 1% failures
+//  overhead 1 => 0.01% failures
+//  overhead 2 => 0.0001% failures
+// etc... as you can see, it make little sense to work with more than 3-4
+// overhead symbols, but at least one should be considered
+static Symbols encode_block(Encoder &enc, Binary &input, const uint8_t overhead = 4)
+{
+	Symbols encoded;
+	
+	auto rv = enc.set_data (input.begin(), input.end());
+	if(rv != input.size()) {
+        std::cerr << "Could not give data to the encoder :(\n";
+        return encoded;
+		
+	}
+	auto symbol_size = enc.symbol_size();
+    uint16_t num_symbols = enc.symbols();
+    std::cerr << "Encode Block size: " << input.size() << " symbols: " <<
+                                static_cast<uint32_t> (num_symbols) <<
                                 " symbol size: " <<
-                                static_cast<int32_t>(enc.symbol_size()) << "\n";
-	time.start();
-    // RQ need to do its magic on the input before you can ask the symbols.
-    // multiple ways to do this are available.
-    // The simplest is to run the computation and block everything until
-    // the work has been done. Not a problem for small sizes (<200),
-    // but big sizes will take **a lot** of time, consider running this with the
-    // asynchronous calls
+                                static_cast<int32_t>(symbol_size) << "\n";
     if (!enc.compute_sync()) {
         // if this happens it's a bug in the library.
         // the **Decoder** can fail, but the **Encoder** can never fail.
-        std::cout << "Enc-RaptorQ failure! really bad!\n";
-        return false;
+        std::cerr << "Enc-RaptorQ failure! really bad!\n";
+        return encoded;
     }
-    std::cout << "Encode: " << time.stop().count()/1000 << " ms" << std::endl;
+	// Now get the source symbols.
+	// source symbols are specials because they contain the input data
+	// as-is, so if you get all of these, you don't need repair symbols
+	for (auto source_sym_it = enc.begin_source(); source_sym_it != enc.end_source(); ++source_sym_it) {
+		// make sure the vector has enough space for the symbol:
+		// fill it with zeros for the size of the symbol
+		Binary source_sym_data (symbol_size, 0);
+		// save the data of the symbol into our vector
+		auto it = source_sym_data.begin();
+		auto written = (*source_sym_it) (it, source_sym_data.end());
+		assert(written == symbol_size);
+		symbol_id tmp_id = (*source_sym_it).id();
+		encoded.emplace_back (tmp_id, std::move(source_sym_data));
+	}
+	//--------------------------------------------
+	// we finished working with the source symbols.
+	// now we need to transmit the repair symbols.
+	auto repair_sym_it = enc.begin_repair();
+	auto max_repair = enc.max_repair(); // RaptorQ can theoretically handle
+										// infinite repair symbols
+										// but computers are not so infinite
+	// we need to have at least enc.symbols() + overhead symbols.
+	for (; encoded.size() < (enc.symbols() + overhead) &&
+							repair_sym_it != enc.end_repair (max_repair);
+														++repair_sym_it) {
+		// make sure the vector has enough space for the symbol:
+		// fill it with zeros for the size of the symbol
+		Binary repair_sym_data (symbol_size, 0);
+		// save the data of the symbol into our vector
+		auto it = repair_sym_data.begin();
+		auto written = (*repair_sym_it) (it, repair_sym_data.end());
+		assert(written == symbol_size);
+		symbol_id tmp_id = (*repair_sym_it).id();
+		encoded.emplace_back (tmp_id, std::move(repair_sym_data));
+	}	
+	return encoded;
+}
+//-------------------------------------------------------------------------
+// mysize is bytes.
+// the "overhead" variable tells us how many symbols more than the
+// minimum we will generate. RaptorQ can not always decode a block,
+// but there is a small probability that it will fail.
+// More overhead => less probability of failure
+//  overhead 0 => 1% failures
+//  overhead 1 => 0.01% failures
+//  overhead 2 => 0.0001% failures
+// etc... as you can see, it make little sense to work with more than 3-4
+// overhead symbols, but at least one should be considered
+bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
+                                                        float drop_probability,
+                                                        const uint8_t overhead)
+{
+    std::mt19937_64 &rnd = create_random_generator();
+    Binary input = generate_random_data(rnd,mysize);
+
+	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(input.size(),symbol_size);
+    Encoder enc (symbols_per_block, symbol_size);
+
+    Timer time(3);
+	time.start();
+	std::cerr << "Encoding start" << std::endl;
+	Symbols encoded = encode_block(enc,input);
+    std::cerr << "Encoded " << encoded.size() << " total symbols, " << time.stop_sec() << " seconds elapesed" << std::endl;
+
+	for(auto i =0; i<5; i++) {
+		input = generate_random_data(rnd,mysize);
+		time.start();
+		encoded = encode_block(enc,input);
+		std::cerr << "Encoded " << encoded.size() << " symbols total, " << time.stop_sec() << " seconds elapesed" << std::endl;
+		if(encoded.size() == 0) {
+			return false;
+		}
+	}
+
+	return false;
+
+	
 
 
     // the probability that a symbol will be dropped.
@@ -145,10 +207,10 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size, std::mt19937_64
         drop_probability = 90.0;   // this is still too high probably.
 
     time.start();
-    // we will store here all encoded and transmitted symbols
-    // std::pair<symbol id (esi), symbol data>
-    using symbol_id = uint32_t; // just a better name
-    std::vector<std::pair<symbol_id, std::vector<uint8_t>>> received;
+
+	Symbols received;
+	
+	
     {
         // in this block we will generate the symbols that will be sent to
         // the decoder.
@@ -264,7 +326,7 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size, std::mt19937_64
     using Decoder_type = RaptorQ::Decoder<
                                     typename std::vector<uint8_t>::iterator,
                                     typename std::vector<uint8_t>::iterator>;
-    Decoder_type dec (block, symbol_size, Decoder_type::Report::COMPLETE);
+    Decoder_type dec (symbols_per_block, symbol_size, Decoder_type::Report::COMPLETE);
     // "Decoder_type::Report::COMPLETE" means that the decoder will not
     // give us any output until we have decoded all the data.
     // there are modes to extract the data symbol by symbol in an ordered
@@ -359,18 +421,11 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size, std::mt19937_64
 
 int main (void)
 {
-    // get a random number generator
-    std::mt19937_64 rnd;
-    std::ifstream rand("/dev/urandom");
-    uint64_t seed = 0;
-    rand.read (reinterpret_cast<char *> (&seed), sizeof(seed));
-    rand.close ();
-    rnd.seed (seed);
-
     // keep some computation in memory. If you use only one block size it
     // will make things faster on bigger block size.
     // allocate 5Mb
-    RaptorQ__v1::local_cache_size (5000000);
+    //RaptorQ__v1::local_cache_size (5000000);
+	RaptorQ__v1::local_cache_size (0);
 
     // for our test, we use an input of random size, between 100 and 10.000
     // bytes.
@@ -378,8 +433,8 @@ int main (void)
     //uint32_t input_size = distr (rnd);
 	uint32_t input_size = 40*1024;
 
-    if (!test_rq (input_size, 62,rnd, 20.0, 4))
+    if (!test_rq (input_size, 62,20.0, 4))
         return -1;
-    std::cout << "The example completed successfully\n";
+    std::cerr << "The example completed successfully\n";
     return 0;
 }
