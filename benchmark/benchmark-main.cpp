@@ -156,9 +156,36 @@ static Symbols encode_block(Encoder &enc, Binary &input, const uint8_t overhead 
 		auto written = (*repair_sym_it) (it, repair_sym_data.end());
 		assert(written == symbol_size);
 		symbol_id tmp_id = (*repair_sym_it).id();
+		//std::cerr << tmp_id << std::endl;
 		encoded.emplace_back (tmp_id, std::move(repair_sym_data));
 	}	
 	return encoded;
+}
+//-------------------------------------------------------------------------
+static Symbols reduction(std::mt19937_64 &rnd, const Symbols &input, uint16_t num_data_symbols, uint32_t drop_probability)
+{
+	assert(input.size()>0);
+
+	std::uniform_int_distribution<unsigned> drop_rnd (0, 100);
+	
+    if (drop_probability > 90) drop_probability = 90;   // this is still too high probably.
+	
+	Symbols output;
+	uint32_t drop_data_cnt = 0, drop_repair_cnt = 0;
+	for (auto it = input.begin(); it != input.end(); ++it) {
+		// can we keep this symbol or do we randomly drop it?
+		uint32_t dropped = drop_rnd (rnd);
+		if (dropped <= drop_probability) {
+			symbol_id id = (*it).first;
+			id>=num_data_symbols?drop_repair_cnt++:drop_data_cnt++;
+		} else {
+			output.push_back(*it);
+		}
+	}
+	auto percent = (drop_data_cnt + drop_repair_cnt)*100/input.size();
+	std::cerr << "Removed " << drop_data_cnt << " data and " <<  drop_repair_cnt << " repair symbols, " 
+		<< drop_probability << "=>" << percent << "%" << std::endl;
+	return output;
 }
 //-------------------------------------------------------------------------
 // mysize is bytes.
@@ -176,27 +203,22 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
                                                         const uint8_t overhead)
 {
     std::mt19937_64 &rnd = create_random_generator();
-    Binary input = generate_random_data(rnd,mysize);
 
-	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(input.size(),symbol_size);
+	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(mysize,symbol_size);
     Encoder enc (symbols_per_block, symbol_size);
 
     Timer time(3);
-	time.start();
-	std::cerr << "Encoding start" << std::endl;
-	Symbols encoded = encode_block(enc,input);
-    std::cerr << "Encoded " << encoded.size() << " total symbols, " << time.stop_sec() << " seconds elapesed" << std::endl;
-
 	for(auto i =0; i<5; i++) {
-		input = generate_random_data(rnd,mysize);
+		Binary input = generate_random_data(rnd,mysize);
 		time.start();
-		encoded = encode_block(enc,input);
+		std::cerr << "Encoding start" << std::endl;
+		Symbols encoded = encode_block(enc,input);
 		std::cerr << "Encoded " << encoded.size() << " symbols total, " << time.stop_sec() << " seconds elapesed" << std::endl;
 		if(encoded.size() == 0) {
 			return false;
 		}
+		Symbols received = reduction(rnd,encoded,enc.symbols(),20);
 	}
-
 	return false;
 
 	
@@ -406,7 +428,7 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
         std::cout << "Decoded: " << mysize << "\n";
     }
 	std::cout << "Decode: " << time.stop().count()/1000 << " ms" << std::endl;
-
+/*
     // byte-wise check: did we actually decode everything the right way?
     for (uint64_t i = 0; i < mysize; ++i) {
         if (input[i] != output[i]) {
@@ -415,7 +437,7 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
             return false;
         }
     }
-
+*/
     return true;
 }
 
