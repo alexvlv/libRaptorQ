@@ -20,6 +20,8 @@
  * along with libRaptorQ.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "Timer.hpp"
+
 #include "../src/RaptorQ/RaptorQ_v1_hdr.hpp"
 #include <algorithm>
 #include <fstream>
@@ -28,7 +30,6 @@
 #include <random>
 #include <stdlib.h>
 #include <vector>
-#include <chrono>
 
 // Demonstration of how to use the C++ RAW interface
 // it's pretty simple, we generate some input,
@@ -38,27 +39,6 @@
 
 // rename the main namespace for ease of use
 namespace RaptorQ = RaptorQ__v1;
-
-// Benchmark stuff:
-// From src/cli/RaptorQ.cpp
-class Timer {
-public:
-    Timer() {}
-    Timer (const Timer&) = delete;
-    Timer& operator= (const Timer&) = delete;
-    Timer (Timer&&) = delete;
-    Timer& operator= (Timer&&) = delete;
-    void start()
-        { t0 = std::chrono::high_resolution_clock::now(); }
-    std::chrono::microseconds stop ()
-    {
-        auto t1 = std::chrono::high_resolution_clock::now();
-        auto diff = t1 - t0;
-        return std::chrono::duration_cast<std::chrono::microseconds> (diff);
-    }
-private:
-    std::chrono::time_point<std::chrono::high_resolution_clock> t0;
-};
 
 // mysize is bytes.
 bool test_rq (const uint32_t mysize, std::mt19937_64 &rnd,
