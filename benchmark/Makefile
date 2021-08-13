@@ -49,7 +49,7 @@ REVDATE:=$(shell $(TOPDIR)/scripts/getgitdate.sh  "$(MAKEFILE_DIR)")
 BRANCH:=$(shell $(TOPDIR)/scripts/getgitbranch.sh  "$(MAKEFILE_DIR)")
 MODIFIED:=$(shell $(TOPDIR)/scripts/getgitmodified.sh "$(MAKEFILE_DIR)")
 
-CFLAGS := -std=gnu++11 -O3 -DNDEBUG
+CFLAGS := -std=gnu++14 -O3 -DNDEBUG
 CFLAGS += -Wall -Wno-unknown-pragmas
 ifeq ($(ARCH),mips)
 	CFLAGS += -Wno-int-in-bool-context
