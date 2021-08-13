@@ -410,6 +410,7 @@ static bool encode (const int64_t symbol_size,
                                         std::istream *input,
                                         std::ostream *output)
 {
+    std::cerr << "encode: " << symbol_size << " " << static_cast<uint32_t> (symbols) << " " <<  repair << std::endl;
     // false on error
     std::vector<uint8_t> buf (static_cast<size_t> (symbol_size), 0);
     std::vector<uint8_t> block_buf;
@@ -421,6 +422,7 @@ static bool encode (const int64_t symbol_size,
     RaptorQ__v1::Encoder<iter_8, iter_8> encoder (symbols,
                                         static_cast<size_t> (symbol_size));
     auto future = encoder.precompute();
+    std::cerr << "encode: precompute done" << std::endl;
     RaptorQ__v1::Error enc_status = RaptorQ__v1::Error::INITIALIZATION;
     uint32_t sym_num = 0;
     uint32_t block_num = 0;
@@ -432,6 +434,7 @@ static bool encode (const int64_t symbol_size,
         input->read (reinterpret_cast<char *> (buf.data()), symbol_size);
         #pragma clang diagnostic pop
         int64_t read = input->gcount();
+        std::cerr << "encode: gcount " << read << std::endl;
         if (read > 0) {
             output->write (reinterpret_cast<char *> (&block_num),
                                                             sizeof(block_num));
@@ -445,12 +448,13 @@ static bool encode (const int64_t symbol_size,
         }
         if (input->eof() || read <= 0) {
             // end of input.
+            std::cerr << "encode: end of input" << std::endl;
             sym_num = static_cast<uint16_t> (symbols);
         }
-
         if (sym_num == static_cast<uint16_t> (symbols)) {
             // give the data to the encoder. It will pad it automatically.
             size_t ret = encoder.set_data (block_buf.begin(), block_buf.end());
+            std::cerr << "encode: give the data to the encoder: " << ret << std::endl;
             if (ret != block_buf.size()) {
                 std::cout << "ERR: can not add block data to the decoder\n";
                 return false;
@@ -466,10 +470,14 @@ static bool encode (const int64_t symbol_size,
                 return false;
             }
             std::vector<uint8_t> rep (static_cast<size_t> (symbol_size), 0);
+            std::cerr << "encode: for: " << sym_num << " " << static_cast<size_t> (symbols) << " " << repair << std::endl;
             for (uint32_t rep_id = sym_num; rep_id <
                            (static_cast<size_t> (symbols) + repair); ++rep_id) {
                 auto rep_start = rep.begin();
+                std::cerr << "encode begin " << rep_id << std::endl;
                 auto rep_length = encoder.encode (rep_start, rep.end(), rep_id);
+                std::cerr << "encode: rep_length " << rep_length << std::endl;
+
                 // rep_length is actually the number of iterators written.
                 // but our iteerators are over uint8_t, so
                 // rep_length == bytes written
@@ -477,6 +485,7 @@ static bool encode (const int64_t symbol_size,
                     std::cerr << "ERR: wrong repair symbol size\n";
                     return false;
                 }
+                std::cerr << "encode: write... " << std::endl;
                 output->write (reinterpret_cast<char *> (&block_num),
                                                             sizeof(block_num));
                 output->write (reinterpret_cast<char *> (&rep_id),
@@ -487,6 +496,7 @@ static bool encode (const int64_t symbol_size,
                                                                 symbol_size);
                 #pragma clang diagnostic pop
             }
+            std::cerr << "encode: for done" << std::endl;
             if (input->eof())
                 return true;
             encoder.clear_data();
