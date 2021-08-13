@@ -1,9 +1,9 @@
 # $Id$ 
 
-ARCH := x86
+ARCH := mips
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-PROJECT := $(notdir $(patsubst %/,%,$(MAKEFILE_DIR)))
+PROJECT := raptor-$(notdir $(patsubst %/,%,$(MAKEFILE_DIR)))
 
 override TOPDIR_LNK="$(MAKEFILE_DIR)/.openwrt"
 TOPDIR := $(shell [ -L $(TOPDIR_LNK) ] && readlink -f $(TOPDIR_LNK) 2>/dev/null)
@@ -51,7 +51,9 @@ MODIFIED:=$(shell $(TOPDIR)/scripts/getgitmodified.sh "$(MAKEFILE_DIR)")
 
 CFLAGS := -std=gnu++11 -O3 -DNDEBUG
 CFLAGS += -Wall -Wno-unknown-pragmas
-CFLAGS += -Wno-int-in-bool-context
+ifeq ($(ARCH),mips)
+	CFLAGS += -Wno-int-in-bool-context
+endif	
 CFLAGS += -DREVISION="$(REVISION)$(MODIFIED) $(BRANCH)" 
 CFLAGS += -DREVDATE="$(REVDATE)"
 
@@ -67,16 +69,26 @@ OBJECTS := $(OBJECTS:.cpp=.o)
 OBJECTS := $(addprefix $(obj_dir)/,$(notdir $(OBJECTS)))
 VPATH := $(source_dirs) $(include_dirs) 
 
-all: install
+default: mips
 
 .PHONY: mips
 mips:
-	$(MAKE) all ARCH=mips
+	$(MAKE) install ARCH=mips
+
+.PHONY: mips-clean
+mips-clean:
+	$(MAKE) clean ARCH=mips
 
 .PHONY: x86
 x86:
-	$(MAKE) all ARCH=x86
+	$(MAKE) install ARCH=x86
 
+.PHONY: x86-clean
+x86-clean:
+	$(MAKE) clean ARCH=x86
+
+	
+	
 install: $(BINARY)
 	@echo Install $^ binaries to $(INSTALLDIR)
 	$(QUIET) install -d $(INSTALLDIR); install $^ $(INSTALLDIR)
