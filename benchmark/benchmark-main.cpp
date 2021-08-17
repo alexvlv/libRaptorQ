@@ -44,6 +44,7 @@ using Symbol = std::pair<symbol_id, Binary>;
 using Symbols = std::vector<Symbol>;
 
 using Encoder = RaptorQ::Encoder<typename Binary::iterator, typename Binary::iterator>;
+using Decoder = RaptorQ::Decoder<typename Binary::iterator, typename Binary::iterator>;
 
 //-------------------------------------------------------------------------
 static std::mt19937_64& create_random_generator(void)
@@ -116,7 +117,7 @@ static Symbols encode_block(Encoder &enc, Binary &input, const uint8_t overhead 
     std::cerr << "Encode Block size: " << input.size() << " symbols: " <<
                                 static_cast<uint32_t> (num_symbols) <<
                                 " symbol size: " <<
-                                static_cast<int32_t>(symbol_size) << "\n";
+                                static_cast<int32_t>(symbol_size) << std::endl;
     if (!enc.compute_sync()) {
         // if this happens it's a bug in the library.
         // the **Decoder** can fail, but the **Encoder** can never fail.
@@ -188,6 +189,55 @@ static Symbols reduction(std::mt19937_64 &rnd, const Symbols &input, uint16_t nu
 	return output;
 }
 //-------------------------------------------------------------------------
+static Binary decode_block(Decoder &dec, Symbols &received)
+{
+	Binary decoded;
+	uint16_t num_symbols = dec.symbols();
+	auto symbol_size = dec.symbol_size();
+    std::cerr << "Decode " << received.size() << " symbols from " <<
+                                static_cast<uint32_t> (num_symbols) << 
+                                ", symbol size: " <<   static_cast<int32_t>(symbol_size) << std::endl;
+    // now push every received symbol into the decoder
+    for (auto &rec_sym : received) {
+        // as a reminder:
+        //  rec_sym.first = symbol_id (uint32_t)
+        //  rec_sym.second = std::vector<uint8_t> symbol_data
+        symbol_id tmp_id = rec_sym.first;
+		auto it = rec_sym.second.begin();
+		auto err = dec.add_symbol (it, rec_sym.second.end(), tmp_id);
+        if (err != RaptorQ::Error::NONE) {
+			if(err == RaptorQ::Error::NOT_NEEDED) {
+				std::cerr << "NOT_NEEDED" << std::endl;
+				break;
+			}
+            // When you add a symbol, you can get:
+            //   NONE: no error
+            //   NOT_NEEDED: libRaptorQ ignored it because everything is
+            //              already decoded
+            //   INITIALIZATION: wrong parameters to the decoder contructor
+            //   WRONG_INPUT: not enough data on the symbol?
+            //   some_other_error: errors in the library
+            std::cerr << "error adding: " << static_cast<unsigned>(err) <<  std::endl;
+            return decoded;
+        }
+	}
+	// by now we now there will be no more input, so we tell this to the
+	// decoder. You can skip this call, but if the decoder does not have
+	// enough data it sill wait forever (or until you call .stop())
+	dec.end_of_input (RaptorQ::Fill_With_Zeros::NO);
+	bool can_decode = dec.can_decode();
+	auto needed_symbols = dec.needed_symbols();
+	std::cerr << "Decoder can_decode: " << can_decode << " needed_symbols: " << needed_symbols << std::endl;
+    auto res = dec.wait_sync();
+    if (res.error != RaptorQ::Error::NONE) {
+        std::cerr << "Couldn't decode.\n";
+        return decoded;
+    }
+	
+	
+	return decoded;
+}
+//-------------------------------------------------------------------------
 // mysize is bytes.
 // the "overhead" variable tells us how many symbols more than the
 // minimum we will generate. RaptorQ can not always decode a block,
@@ -205,7 +255,8 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
     std::mt19937_64 &rnd = create_random_generator();
 
 	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(mysize,symbol_size);
-    Encoder enc (symbols_per_block, symbol_size);
+	Encoder enc (symbols_per_block, symbol_size);
+    Decoder dec (symbols_per_block, symbol_size, Decoder::Report::COMPLETE);
 
     Timer time(3);
 	for(auto i =0; i<5; i++) {
@@ -218,116 +269,17 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
 			return false;
 		}
 		Symbols received = reduction(rnd,encoded,enc.symbols(),20);
+		Binary decoded = decode_block(dec,received);
 	}
 	return false;
 
 	
 
 
-    // the probability that a symbol will be dropped.
-    if (drop_probability > static_cast<float> (90.0))
-        drop_probability = 90.0;   // this is still too high probably.
 
-    time.start();
-
-	Symbols received;
 	
 	
-    {
-        // in this block we will generate the symbols that will be sent to
-        // the decoder.
-        // a block of size X will need at least X symbols to be decoded.
-        // we will randomly drop some symbols, but we will keep generating
-        // repari symbols until we have the required number of symbols.
-
-        std::uniform_real_distribution<float> drop_rnd (0.0, 100.0);
-        uint32_t received_tot = 0;
-
-        // Now get the source symbols.
-        // source symbols are specials because they contain the input data
-        // as-is, so if you get all of these, you don't need repair symbols
-        // to make sure that we are using the decoder, drop the first
-        // source symbol.
-        auto source_sym_it = enc.begin_source();
-        ++source_sym_it; // ignore the first soure symbol (=> drop it)
-        source_sym_it++;
-        for (; source_sym_it != enc.end_source(); ++source_sym_it) {
-            // we save the symbol here:
-            // make sure the vector has enough space for the symbol:
-            // fill it with zeros for the size of the symbol
-            std::vector<uint8_t> source_sym_data (symbol_size, 0);
-
-            // save the data of the symbol into our vector
-            auto it = source_sym_data.begin();
-            auto written = (*source_sym_it) (it, source_sym_data.end());
-            if (written != symbol_size) {
-                // this can only happen if "source_sym_data" did not have
-                // enough space for a symbol (here: never)
-                std::cout << written << "-vs-" << symbol_size <<
-                                    " Could not get the whole source symbol!\n";
-                return false;
-            }
-
-            // can we keep this symbol or do we randomly drop it?
-            float dropped = drop_rnd (rnd);
-            if (dropped <= drop_probability) {
-                continue; // start the cycle again
-            }
-
-            // good, the symbol was received.
-            ++received_tot;
-            // add it to the vector of received symbols
-            symbol_id tmp_id = (*source_sym_it).id();
-            received.emplace_back (tmp_id, std::move(source_sym_data));
-        }
-
-        std::cout << "Source Packet lost: " << enc.symbols() - received.size()
-                                                                        << "\n";
-
-        std::cout << "Source Packet lost: " << time.stop().count()/1000 << " ms" << std::endl;
-
-        time.start();
-        //--------------------------------------------
-        // we finished working with the source symbols.
-        // now we need to transmit the repair symbols.
-        auto repair_sym_it = enc.begin_repair();
-        auto max_repair = enc.max_repair(); // RaptorQ can theoretically handle
-                                            // infinite repair symbols
-                                            // but computers are not so infinite
-
-        // we need to have at least enc.symbols() + overhead symbols.
-        for (; received.size() < (enc.symbols() + overhead) &&
-                                repair_sym_it != enc.end_repair (max_repair);
-                                                            ++repair_sym_it) {
-            // we save the symbol here:
-            // make sure the vector has enough space for the symbol:
-            // fill it with zeros for the size of the symbol
-            std::vector<uint8_t> repair_sym_data (symbol_size, 0);
-
-            // save the data of the symbol into our vector
-            auto it = repair_sym_data.begin();
-            auto written = (*repair_sym_it) (it, repair_sym_data.end());
-            if (written != symbol_size) {
-                // this can only happen if "repair_sym_data" did not have
-                // enough space for a symbol (here: never)
-                std::cout << written << "-vs-" << symbol_size <<
-                                    " Could not get the whole repair symbol!\n";
-                return false;
-            }
-
-            // can we keep this symbol or do we randomly drop it?
-            float dropped = drop_rnd (rnd);
-            if (dropped <= drop_probability) {
-                continue; // start the cycle again
-            }
-
-            // good, the symbol was received.
-            ++received_tot;
-            // add it to the vector of received symbols
-            symbol_id tmp_id = (*repair_sym_it).id();
-            received.emplace_back (tmp_id, std::move(repair_sym_data));
-
-        }
+/*
         if (repair_sym_it == enc.end_repair (enc.max_repair())) {
             // we dropped waaaay too many symbols!
             // should never happen in real life. it means that we do not
@@ -338,7 +290,8 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
             std::cout << "Maybe losing " << drop_probability << "% is too much?\n";
             return false;
         }
-    }
+*/
+#if 0
     std::cout << "Receive: " << time.stop().count()/1000 << " ms" << std::endl;
     // Now we all the source and repair symbols are in "received".
     // we will use those to start decoding:
@@ -438,6 +391,7 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
         }
     }
 */
+#endif
     return true;
 }
 
@@ -455,7 +409,7 @@ int main (void)
     //uint32_t input_size = distr (rnd);
 	uint32_t input_size = 40*1024;
 
-    if (!test_rq (input_size, 62,20.0, 4))
+    if (!test_rq (input_size, 62,5.0, 4))
         return -1;
     std::cerr << "The example completed successfully\n";
     return 0;
