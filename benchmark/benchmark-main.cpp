@@ -22,6 +22,7 @@
  */
 
 #include "Timer.hpp"
+#include "RandomDrop.hpp"
 
 #include "../src/RaptorQ/RaptorQ_v1_hdr.hpp"
 #include <algorithm>
@@ -47,24 +48,13 @@ using Encoder = RaptorQ::Encoder<typename Binary::iterator, typename Binary::ite
 using Decoder = RaptorQ::Decoder<typename Binary::iterator, typename Binary::iterator>;
 
 //-------------------------------------------------------------------------
-static std::mt19937_64& create_random_generator(void)
-{
-    // get a random number generator
-    static std::mt19937_64 rnd;
-    std::ifstream rand("/dev/urandom");
-    uint64_t seed = 0;
-    rand.read (reinterpret_cast<char *> (&seed), sizeof(seed));
-    rand.close ();
-    rnd.seed (seed);
-	return rnd;
-}
-//-------------------------------------------------------------------------
 // size is bytes.
-static Binary  generate_random_data(std::mt19937_64 &rnd,uint32_t size)
+static Binary  generate_random_data(uint32_t size)
 {
     Binary input;
     input.reserve (size);
 
+	std::mt19937_64 &rnd = RandomDrop::get_random_generator();
     std::uniform_int_distribution<int16_t> distr (0, std::numeric_limits<uint8_t>::max());
 	for (size_t idx = 0; idx < size; ++idx) {
         input.push_back (static_cast<uint8_t> (distr(rnd)));
@@ -163,20 +153,16 @@ static Symbols encode_block(Encoder &enc, Binary &input, const uint8_t overhead 
 	return encoded;
 }
 //-------------------------------------------------------------------------
-static Symbols reduction(std::mt19937_64 &rnd, const Symbols &input, uint16_t num_data_symbols, uint32_t drop_probability)
+static Symbols reduction(const Symbols &input, uint16_t num_data_symbols, uint32_t drop_probability)
 {
 	assert(input.size()>0);
 
-	std::uniform_int_distribution<unsigned> drop_rnd (0, 100);
-	
-    if (drop_probability > 90) drop_probability = 90;   // this is still too high probably.
-	
 	Symbols output;
+	RandomDrop drop(drop_probability);
 	uint32_t drop_data_cnt = 0, drop_repair_cnt = 0;
 	for (auto it = input.begin(); it != input.end(); ++it) {
 		// can we keep this symbol or do we randomly drop it?
-		uint32_t dropped = drop_rnd (rnd);
-		if (dropped <= drop_probability) {
+		if (!drop()) {
 			symbol_id id = (*it).first;
 			id>=num_data_symbols?drop_repair_cnt++:drop_data_cnt++;
 		} else {
@@ -248,19 +234,15 @@ static Binary decode_block(Decoder &dec, Symbols &received)
 //  overhead 2 => 0.0001% failures
 // etc... as you can see, it make little sense to work with more than 3-4
 // overhead symbols, but at least one should be considered
-bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
-                                                        float drop_probability,
-                                                        const uint8_t overhead)
+bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
 {
-    std::mt19937_64 &rnd = create_random_generator();
-
 	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(mysize,symbol_size);
 	Encoder enc (symbols_per_block, symbol_size);
     Decoder dec (symbols_per_block, symbol_size, Decoder::Report::COMPLETE);
 
     Timer time(3);
-	for(auto i =0; i<5; i++) {
-		Binary input = generate_random_data(rnd,mysize);
+	for(auto i =0; i<1; i++) {
+		Binary input = generate_random_data(mysize);
 		time.start();
 		std::cerr << "Encoding start" << std::endl;
 		Symbols encoded = encode_block(enc,input);
@@ -268,7 +250,7 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size,
 		if(encoded.size() == 0) {
 			return false;
 		}
-		Symbols received = reduction(rnd,encoded,enc.symbols(),20);
+		Symbols received = reduction(encoded,enc.symbols(),20);
 		Binary decoded = decode_block(dec,received);
 	}
 	return false;
@@ -409,7 +391,7 @@ int main (void)
     //uint32_t input_size = distr (rnd);
 	uint32_t input_size = 40*1024;
 
-    if (!test_rq (input_size, 62,5.0, 4))
+    if (!test_rq (input_size, 62))
         return -1;
     std::cerr << "The example completed successfully\n";
     return 0;
