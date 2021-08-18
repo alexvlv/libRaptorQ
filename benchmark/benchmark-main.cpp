@@ -305,6 +305,12 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
 		ok = false;
 		std::cerr << "Generate random data..." << std::endl;
 		Binary input = generate_random_data(mysize);
+#if 0
+		std::cerr << "Precompute start" << std::endl;
+		time.start();
+		enc.precompute_sync();
+		std::cerr << "Precompute: " << time.stop_sec() << " seconds elapsed" << std::endl;
+#endif		
 		time.start();
 		std::cerr << "Encoding start" << std::endl;
 		Symbols encoded = encode_block(enc,input,10);
@@ -322,6 +328,9 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
 		std::cerr << "Decoded " << encoded.size() << " symbols total, " << time.stop_sec() << " seconds elapsed" << std::endl;
 		bool ok = std::equal(input.begin(),input.end(),decoded.begin());
 		std::cerr << "Compare result: " << (ok?"OK":"FAILED!") << std::endl << std::endl;
+		if(!ok) {
+			break;
+		}
 	}
     return ok;
 }
