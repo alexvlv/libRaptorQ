@@ -92,9 +92,12 @@ static RaptorQ::Block_Size calc_symbols_per_block(size_t block_length, const uin
 //  overhead 2 => 0.0001% failures
 // etc... as you can see, it make little sense to work with more than 3-4
 // overhead symbols, but at least one should be considered
-static Symbols encode_block(Encoder &enc, Binary &input, const uint8_t overhead = 4)
+static Symbols encode_block(Encoder &enc, Binary &input, uint32_t drop_probability = 5)
 {
+	const size_t overhead = 4;
 	Symbols encoded;
+	RandomDrop drop(drop_probability);
+	uint32_t drop_data_cnt = 0, drop_repair_cnt = 0;
 	
 	auto rv = enc.set_data (input.begin(), input.end());
 	if(rv != input.size()) {
@@ -104,10 +107,12 @@ static Symbols encode_block(Encoder &enc, Binary &input, const uint8_t overhead 
 	}
 	auto symbol_size = enc.symbol_size();
     uint16_t num_symbols = enc.symbols();
-    std::cerr << "Encode Block size: " << input.size() << " symbols: " <<
-                                static_cast<uint32_t> (num_symbols) <<
-                                " symbol size: " <<
-                                static_cast<int32_t>(symbol_size) << std::endl;
+	auto real_size = symbol_size * num_symbols;
+    std::cerr << "Encode Input block size: " << input.size() 
+		<< " symbols: " <<  static_cast<uint32_t> (num_symbols) 
+		<< " symbol size: " << static_cast<int32_t>(symbol_size) 
+		<< " Real block size: " << real_size
+		<< std::endl;
     if (!enc.compute_sync()) {
         // if this happens it's a bug in the library.
         // the **Decoder** can fail, but the **Encoder** can never fail.
@@ -125,6 +130,11 @@ static Symbols encode_block(Encoder &enc, Binary &input, const uint8_t overhead 
 		auto it = source_sym_data.begin();
 		auto written = (*source_sym_it) (it, source_sym_data.end());
 		assert(written == symbol_size);
+		if(drop()) {
+		//if(true) {
+			drop_data_cnt++;
+			continue;
+		}
 		symbol_id tmp_id = (*source_sym_it).id();
 		encoded.emplace_back (tmp_id, std::move(source_sym_data));
 	}
@@ -146,13 +156,31 @@ static Symbols encode_block(Encoder &enc, Binary &input, const uint8_t overhead 
 		auto it = repair_sym_data.begin();
 		auto written = (*repair_sym_it) (it, repair_sym_data.end());
 		assert(written == symbol_size);
+		if(drop()) {
+			drop_repair_cnt++;
+			continue;
+		}
 		symbol_id tmp_id = (*repair_sym_it).id();
 		//std::cerr << tmp_id << std::endl;
 		encoded.emplace_back (tmp_id, std::move(repair_sym_data));
-	}	
+	}
+	if (repair_sym_it == enc.end_repair (enc.max_repair())) {
+		// we dropped waaaay too many symbols!
+		// should never happen in real life. it means that we do not
+		// have enough repair symbols.
+		// at this point you can actually start to retransmit the
+		// repair symbols from enc.begin_repair(), but we don't care in
+		// this example
+		std::cerr << "Maybe losing " << drop_probability << "% is too much?\n";
+		return Symbols{};
+	}
+	std::cerr << "Dropped " << drop_data_cnt << " data and " <<  drop_repair_cnt << " repair symbols, " 
+		<< drop_probability << "%" << std::endl;
+	
 	return encoded;
 }
 //-------------------------------------------------------------------------
+#if 0
 static Symbols reduction(const Symbols &input, uint16_t num_data_symbols, uint32_t drop_probability)
 {
 	assert(input.size()>0);
@@ -174,15 +202,18 @@ static Symbols reduction(const Symbols &input, uint16_t num_data_symbols, uint32
 		<< drop_probability << "=>" << percent << "%" << std::endl;
 	return output;
 }
+#endif
 //-------------------------------------------------------------------------
-static Binary decode_block(Decoder &dec, Symbols &received)
+static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size)
 {
 	Binary decoded;
 	uint16_t num_symbols = dec.symbols();
 	auto symbol_size = dec.symbol_size();
-    std::cerr << "Decode " << received.size() << " symbols from " <<
-                                static_cast<uint32_t> (num_symbols) << 
-                                ", symbol size: " <<   static_cast<int32_t>(symbol_size) << std::endl;
+    std::cerr << "Decode " << received.size() << " symbols from " 
+		<< static_cast<uint32_t> (num_symbols) 
+		<< ", symbol size: " << static_cast<int32_t>(symbol_size)
+		<< " Data size: " << data_size
+		<< std::endl;
     // now push every received symbol into the decoder
     for (auto &rec_sym : received) {
         // as a reminder:
@@ -214,13 +245,42 @@ static Binary decode_block(Decoder &dec, Symbols &received)
 	bool can_decode = dec.can_decode();
 	auto needed_symbols = dec.needed_symbols();
 	std::cerr << "Decoder can_decode: " << can_decode << " needed_symbols: " << needed_symbols << std::endl;
+	if(!can_decode) {
+        std::cerr << "Couldn't decode!\n";
+        return decoded;
+	}
     auto res = dec.wait_sync();
     if (res.error != RaptorQ::Error::NONE) {
-        std::cerr << "Couldn't decode.\n";
+        std::cerr << "Decoding FAILED!.\n";
         return decoded;
     }
-	
-	
+	// now save the decoded data in our output
+    size_t decode_from_byte = 0;
+    size_t skip_bytes_at_begining_of_output = 0;
+	decoded.resize(data_size,0);
+    auto out_it = decoded.begin();
+    auto decode_result = dec.decode_bytes (out_it, decoded.end(), decode_from_byte, skip_bytes_at_begining_of_output);
+    // "decode_from_byte" can be used to have only a part of the output.
+    // it can be used in advanced setups where you ask only a part
+    // of the block at a time.
+    // "skip_bytes_at_begining_of_output" is used when dealing with containers
+    // which size does not align with the output. For really advanced usage only
+    // Both should be zero for most setups.
+
+	if (decode_result.written != data_size) {
+        if (decode_result.written == 0) {
+            // we were really unlucky and the RQ algorithm needed
+            // more symbols!
+            std::cerr << "Couldn't decode, RaptorQ Algorithm failure. Can't Retry!\n";
+        } else {
+            // probably a library error
+            std::cerr << "Partial Decoding? This should not have happened: " <<
+                                    decode_result.written  << " vs " << data_size << "\n";
+        }
+        return Binary{};
+    } else {
+        std::cerr << "Decoded: " << data_size << "\n";
+    }
 	return decoded;
 }
 //-------------------------------------------------------------------------
@@ -241,140 +301,30 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
     Decoder dec (symbols_per_block, symbol_size, Decoder::Report::COMPLETE);
 
     Timer time(3);
-	for(auto i =0; i<1; i++) {
+	bool ok = false;
+	for(auto i =0; i<5; i++) {
+		ok = false;
+		std::cerr << "Generate random data..." << std::endl;
 		Binary input = generate_random_data(mysize);
 		time.start();
 		std::cerr << "Encoding start" << std::endl;
-		Symbols encoded = encode_block(enc,input);
-		std::cerr << "Encoded " << encoded.size() << " symbols total, " << time.stop_sec() << " seconds elapesed" << std::endl;
+		Symbols encoded = encode_block(enc,input,10);
+		std::cerr << "Encoded " << encoded.size() << " symbols total, " << time.stop_sec() << " seconds elapsed" << std::endl;
 		if(encoded.size() == 0) {
-			return false;
+			break;
 		}
-		Symbols received = reduction(encoded,enc.symbols(),20);
-		Binary decoded = decode_block(dec,received);
+		//Symbols received = reduction(encoded,enc.symbols(),20);
+		std::cerr << "Decoding start" << std::endl;
+		time.start();
+		Binary decoded = decode_block(dec,encoded,mysize);
+		if(decoded.empty()) {
+			break;
+		}
+		std::cerr << "Decoded " << encoded.size() << " symbols total, " << time.stop_sec() << " seconds elapsed" << std::endl;
+		bool ok = std::equal(input.begin(),input.end(),decoded.begin());
+		std::cerr << "Compare result: " << (ok?"OK":"FAILED!") << std::endl << std::endl;
 	}
-	return false;
-
-	
-
-
-
-	
-	
-/*
-        if (repair_sym_it == enc.end_repair (enc.max_repair())) {
-            // we dropped waaaay too many symbols!
-            // should never happen in real life. it means that we do not
-            // have enough repair symbols.
-            // at this point you can actually start to retransmit the
-            // repair symbols from enc.begin_repair(), but we don't care in
-            // this example
-            std::cout << "Maybe losing " << drop_probability << "% is too much?\n";
-            return false;
-        }
-*/
-#if 0
-    std::cout << "Receive: " << time.stop().count()/1000 << " ms" << std::endl;
-    // Now we all the source and repair symbols are in "received".
-    // we will use those to start decoding:
-
-    time.start();
-    // define "Decoder_type" to write less afterwards
-    using Decoder_type = RaptorQ::Decoder<
-                                    typename std::vector<uint8_t>::iterator,
-                                    typename std::vector<uint8_t>::iterator>;
-    Decoder_type dec (symbols_per_block, symbol_size, Decoder_type::Report::COMPLETE);
-    // "Decoder_type::Report::COMPLETE" means that the decoder will not
-    // give us any output until we have decoded all the data.
-    // there are modes to extract the data symbol by symbol in an ordered
-    // an unordered fashion, but let's keep this simple.
-
-
-    // we will store the output of the decoder here:
-    // note: the output need to have at least "mysize" bytes, and
-    // we fill it with zeros
-    std::vector<uint8_t> output (mysize, 0);
-
-    // now push every received symbol into the decoder
-    for (auto &rec_sym : received) {
-        // as a reminder:
-        //  rec_sym.first = symbol_id (uint32_t)
-        //  rec_sym.second = std::vector<uint8_t> symbol_data
-        symbol_id tmp_id = rec_sym.first;
-        auto it = rec_sym.second.begin();
-        auto err = dec.add_symbol (it, rec_sym.second.end(), tmp_id);
-        if (err != RaptorQ::Error::NONE && err != RaptorQ::Error::NOT_NEEDED) {
-            // When you add a symbol, you can get:
-            //   NONE: no error
-            //   NOT_NEEDED: libRaptorQ ignored it because everything is
-            //              already decoded
-            //   INITIALIZATION: wrong parameters to the decoder contructor
-            //   WRONG_INPUT: not enough data on the symbol?
-            //   some_other_error: errors in the library
-            std::cout << "error adding?\n";
-            return false;
-        }
-    }
-    std::cout << "Push every received symbol into the decoder: " << time.stop().count()/1000 << " ms" << std::endl;
-
-    time.start();
-    // by now we now there will be no more input, so we tell this to the
-    // decoder. You can skip this call, but if the decoder does not have
-    // enough data it sill wait forever (or until you call .stop())
-    dec.end_of_input (RaptorQ::Fill_With_Zeros::NO);
-    // optional if you want partial decoding without using the repair
-    // symbols
-    // std::vector<bool> symbols_bitmask = dec.end_of_input (
-    //                                          RaptorQ::Fill_With_Zeros::YES);
-
-    // decode, and do not return until the computation is finished.
-    auto res = dec.wait_sync();
-    if (res.error != RaptorQ::Error::NONE) {
-        std::cout << "Couldn't decode.\n";
-        return false;
-    }
-
-    // now save the decoded data in our output
-    size_t decode_from_byte = 0;
-    size_t skip_bytes_at_begining_of_output = 0;
-    auto out_it = output.begin();
-    auto decoded = dec.decode_bytes (out_it, output.end(), decode_from_byte,
-                                            skip_bytes_at_begining_of_output);
-    // "decode_from_byte" can be used to have only a part of the output.
-    // it can be used in advanced setups where you ask only a part
-    // of the block at a time.
-    // "skip_bytes_at_begining_of_output" is used when dealing with containers
-    // which size does not align with the output. For really advanced usage only
-    // Both should be zero for most setups.
-
-    if (decoded.written != mysize) {
-        if (decoded.written == 0) {
-            // we were really unlucky and the RQ algorithm needed
-            // more symbols!
-            std::cout << "Couldn't decode, RaptorQ Algorithm failure. "
-                                                            "Can't Retry.\n";
-        } else {
-            // probably a library error
-            std::cout << "Partial Decoding? This should not have happened: " <<
-                                    decoded.written  << " vs " << mysize << "\n";
-        }
-        return false;
-    } else {
-        std::cout << "Decoded: " << mysize << "\n";
-    }
-	std::cout << "Decode: " << time.stop().count()/1000 << " ms" << std::endl;
-/*
-    // byte-wise check: did we actually decode everything the right way?
-    for (uint64_t i = 0; i < mysize; ++i) {
-        if (input[i] != output[i]) {
-            // this is a bug in the library, please report
-            std::cout << "The output does not correspond to the input!\n";
-            return false;
-        }
-    }
-*/
-#endif
-    return true;
+    return ok;
 }
 
 int main (void)
