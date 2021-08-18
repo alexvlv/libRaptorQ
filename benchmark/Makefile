@@ -44,11 +44,6 @@ source_dirs := .
 include_dirs := . ../src ../external/eigen3
 obj_dir := obj$(EXT)
 
-REVISION:=$(shell $(TOPDIR)/scripts/getgitver.sh "$(MAKEFILE_DIR)")
-REVDATE:=$(shell $(TOPDIR)/scripts/getgitdate.sh  "$(MAKEFILE_DIR)")
-BRANCH:=$(shell $(TOPDIR)/scripts/getgitbranch.sh  "$(MAKEFILE_DIR)")
-MODIFIED:=$(shell $(TOPDIR)/scripts/getgitmodified.sh "$(MAKEFILE_DIR)")
-
 CFLAGS := -std=gnu++14 -O3 -DNDEBUG
 CFLAGS += -Wall -Wno-unknown-pragmas
 ifeq ($(ARCH),mips)
@@ -98,23 +93,25 @@ $(BINARY): $(BINARY)-unstripped
 	@echo Strip $@ from $^..
 	$(QUIET) $(STRIP) -o $(BINARY) $(BINARY)-unstripped
 
-$(BINARY)-unstripped: $(obj_dir) $(OBJECTS) 
+$(BINARY)-unstripped: $(obj_dir) .git.h $(OBJECTS) 
 	@echo Create $(BINARY) $(REVISION)$(MODIFIED) $(BRANCH) $(REVDATE) 
 	@echo Linking $@ from $^...
 	$(QUIET)  $(CPP)  -o $@  $(OBJECTS)  $(LDFLAGS) $(LIBS) 
 
 
-.PHONY: rev
-rev:
-	@echo Revision: $(REVISION)$(MODIFIED) $(BRANCH) $(REVDATE) 
+.PHONY: git
+git: clean .git.h
+
+.git.h:
+	$(QUIET) cd $(MAKEFILE_DIR) && sh git.sh
 
 .PHONY: clean
 clean:
-	$(QUIET) rm -f  $(BINARY) $(BINARY)-unstripped; rm -f -r $(obj_dir);
+	$(QUIET) rm -f  $(BINARY) $(BINARY)-unstripped .git.h; rm -f -r $(obj_dir);
 
 .PHONY: distclean
 distclean:
-	$(QUIET) rm -f  $(PROJECT)-x86* $(PROJECT)-mips*; rm -f -r obj*;
+	$(QUIET) rm -f  $(PROJECT)-x86* $(PROJECT)-mips* .git.h; rm -f -r obj*;
 
 
 

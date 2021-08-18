@@ -21,6 +21,12 @@
  * along with libRaptorQ.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include ".git.h"
+
+#ifndef VERSION
+#define VERSION "-"
+#endif
+
 #include "Timer.hpp"
 #include "RandomDrop.hpp"
 
@@ -337,7 +343,8 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
 
 int main (void)
 {
-    // keep some computation in memory. If you use only one block size it
+    std::cerr << "Raptor benchmark " VERSION " Compiled: " __DATE__ " " __TIME__ << std::endl;
+	// keep some computation in memory. If you use only one block size it
     // will make things faster on bigger block size.
     // allocate 5Mb
     //RaptorQ__v1::local_cache_size (5000000);
