@@ -103,7 +103,6 @@ static Symbols encode_block(Encoder &enc, Binary &input, uint32_t drop_probabili
 	if(rv != input.size()) {
         std::cerr << "Could not give data to the encoder :(\n";
         return encoded;
-		
 	}
 	auto symbol_size = enc.symbol_size();
     uint16_t num_symbols = enc.symbols();
@@ -297,12 +296,12 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size)
 bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
 {
 	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(mysize,symbol_size);
-	Encoder enc (symbols_per_block, symbol_size);
-    Decoder dec (symbols_per_block, symbol_size, Decoder::Report::COMPLETE);
 
     Timer time(3);
 	bool ok = false;
 	for(auto i =0; i<5; i++) {
+		Encoder enc (symbols_per_block, symbol_size);
+		Decoder dec (symbols_per_block, symbol_size, Decoder::Report::COMPLETE);
 		ok = false;
 		std::cerr << "Generate random data..." << std::endl;
 		Binary input = generate_random_data(mysize);
