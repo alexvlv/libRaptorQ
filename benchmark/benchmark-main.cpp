@@ -340,10 +340,10 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
 	}
     return ok;
 }
-
-int main (void)
+//-------------------------------------------------------------------------
+int benchmark()
 {
-    std::cerr << "Raptor benchmark " VERSION " Compiled: " __DATE__ " " __TIME__ << std::endl;
+    std::cerr << "Raptor benchmark test" << std::endl;
 	// keep some computation in memory. If you use only one block size it
     // will make things faster on bigger block size.
     // allocate 5Mb
@@ -361,3 +361,47 @@ int main (void)
     std::cerr << "The example completed successfully\n";
     return 0;
 }
+//-------------------------------------------------------------------------
+static void usage(const std::string pname)
+{
+	std::cerr << "Usage: " << std::endl << pname << " encode|decode|benchmark" << std::endl;
+}
+//-------------------------------------------------------------------------
+// https://ru.stackoverflow.com/questions/7920/switch-%D0%B4%D0%BB%D1%8F-string/7924
+// FNV-1a hash, 32-bit 
+inline constexpr std::uint32_t fnv1a(const char* str, std::uint32_t hash = 2166136261UL) {
+    return *str ? fnv1a(str + 1, (hash ^ *str) * 16777619ULL) : hash;
+}
+//-------------------------------------------------------------------------
+static int process_command(char **argv) 
+{
+	int rv = -1;
+	const std::string cmd = std::string (argv[1]).substr(0,3);
+	switch (fnv1a(cmd.c_str())) {
+		case fnv1a("ben"):
+			rv = benchmark();
+			break;
+		case fnv1a("enc"):
+			std::cout << "Encode\n";
+			break;
+		case fnv1a("dec"):
+			std::cout << "Decode\n"; 
+			break;
+		default:
+			usage(std::string (argv[0]));
+	}
+	return rv;
+}
+//-------------------------------------------------------------------------
+int main (int argc, char **argv)
+{
+	std::cerr << "Raptor benchmark " VERSION " Compiled: " __DATE__ " " __TIME__ << std::endl;
+	int rv = -1;
+	if(argc>1) {
+		rv = process_command(argv);
+	} else {
+		usage(std::string (argv[0]));
+	}
+	return rv;
+}
+//-------------------------------------------------------------------------
