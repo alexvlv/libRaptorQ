@@ -218,7 +218,7 @@ static Symbols reduction(const Symbols &input, uint16_t num_data_symbols, uint32
 }
 #endif
 //-------------------------------------------------------------------------
-static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size)
+static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size = 0)
 {
 	Binary decoded;
 	uint16_t num_symbols = dec.symbols();
@@ -229,11 +229,22 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size)
 		<< " Data size: " << data_size
 		<< std::endl;
     // now push every received symbol into the decoder
+	int cnt = 0;
     for (auto &rec_sym : received) {
         // as a reminder:
         //  rec_sym.first = symbol_id (uint32_t)
         //  rec_sym.second = std::vector<uint8_t> symbol_data
         symbol_id tmp_id = rec_sym.first;
+		std::cerr << "Dec #" << std::dec << cnt++
+			<< " id: " << tmp_id << " data: " << rec_sym.second.size() << " " 
+			<< std::hex 
+			<< std::setfill('0') << std::setw(16) 
+			<< *reinterpret_cast<uint64_t*>(rec_sym.second.data())
+			<< std::setfill('0') << std::setw(16)
+			<< *reinterpret_cast<uint64_t*>(rec_sym.second.data()+sizeof(uint64_t)) 
+			<< std::setfill('0') << std::setw(16)
+			<< *reinterpret_cast<uint64_t*>(rec_sym.second.data()+sizeof(uint64_t)*2) 
+			<< std::endl;
 		auto it = rec_sym.second.begin();
 		auto err = dec.add_symbol (it, rec_sym.second.end(), tmp_id);
         if (err != RaptorQ::Error::NONE) {
@@ -269,9 +280,11 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size)
         return decoded;
     }
 	// now save the decoded data in our output
-    size_t decode_from_byte = 0;
-    size_t skip_bytes_at_begining_of_output = 0;
-	decoded.resize(data_size,0);
+	size_t decode_from_byte = 0;
+	size_t skip_bytes_at_begining_of_output = 0;
+	if( data_size > 0 ) {
+		decoded.resize(data_size,0);
+	}
     auto out_it = decoded.begin();
     auto decode_result = dec.decode_bytes (out_it, decoded.end(), decode_from_byte, skip_bytes_at_begining_of_output);
     // "decode_from_byte" can be used to have only a part of the output.
@@ -281,7 +294,7 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size)
     // which size does not align with the output. For really advanced usage only
     // Both should be zero for most setups.
 
-	if (decode_result.written != data_size) {
+	if (decode_result.written != decoded.size()) {
         if (decode_result.written == 0) {
             // we were really unlucky and the RQ algorithm needed
             // more symbols!
@@ -289,11 +302,11 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size)
         } else {
             // probably a library error
             std::cerr << "Partial Decoding? This should not have happened: " <<
-                                    decode_result.written  << " vs " << data_size << "\n";
+                                    decode_result.written  << " vs " << decoded.size() << "\n";
         }
         return Binary{};
     } else {
-        std::cerr << "Decoded: " << data_size << "\n";
+        std::cerr << "Decoded: " << decoded.size() << "\n";
     }
 	return decoded;
 }
@@ -492,6 +505,83 @@ static bool encode()
 	return true;
 }
 //-------------------------------------------------------------------------
+namespace std {
+	static std::istream& operator>>(std::istream& is, Symbol &sym)
+	{
+		const uint16_t symbol_size = SYMBOL_SIZE;
+		uint32_t tmp_id_le;
+		is.read (reinterpret_cast<char *> (&tmp_id_le), sizeof(tmp_id_le));
+        if (is.eof()) {
+			return is;
+		}
+        if ( is.gcount() != sizeof(tmp_id_le)) {
+			std::cerr << "WARN: incomplete ID, gcount: " << is.gcount() << "!" << std::endl;
+			return is;
+		}
+		sym.first = letoh32(tmp_id_le);
+		Binary source_sym_data (symbol_size, 0);
+		is.read (reinterpret_cast<char *> (source_sym_data.data()), source_sym_data.size());
+        if (is.eof() || is.gcount() != source_sym_data.size()) {
+			std::cerr << "WARN: incomplete symbol!" << std::endl;
+			return is;
+		}
+		sym.second = std::move(source_sym_data);
+		return is;
+	}
+}
+//-------------------------------------------------------------------------
+static Symbols read_encoded()
+{
+	const uint16_t symbol_size = SYMBOL_SIZE;
+	Symbols encoded;
+	std::string fname = fname_base + "." + std::to_string(symbol_size) + ".enc";
+
+	std::cerr << "Read encoded from [" << fname << "]..." << std::endl;
+
+	std::ifstream in_file;
+	in_file.open (fname, std::ios_base::binary | std::ios_base::in);
+	if (!in_file.is_open()) {
+		std::cerr << "ERR: can't open encoded binary file for reading\n";
+		return Symbols{};
+	}
+	Symbol sym;
+	while(in_file >> sym) {
+		encoded.push_back(static_cast<Symbol&&>(sym));
+	}
+	in_file.close();
+	std::cerr << "Read " << encoded.size() << " symbols" << std::endl;
+	return encoded;
+}
+//-------------------------------------------------------------------------
+static bool decode()
+{
+   	const uint32_t block_size = BLOCK_SIZE;
+	const uint16_t symbol_size = SYMBOL_SIZE;
+
+	std::cerr << "Raptor dncode test" << std::endl;
+
+	Symbols encoded = read_encoded();
+	if(encoded.empty()){
+		return false;
+	} 
+
+	RaptorQ__v1::local_cache_size (0);
+	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(block_size,symbol_size);
+	Decoder dec (symbols_per_block, symbol_size, Decoder::Report::COMPLETE);
+	
+	std::cerr << "Decoding start" << std::endl;
+	Timer time(3);
+	time.start();
+	Binary decoded = decode_block(dec,encoded);
+	if(decoded.empty()) {
+		return false;
+	}
+	std::cerr << "Decoded " << encoded.size() << " symbols total, " << time.stop_sec() << " seconds elapsed" << std::endl;
+
+
+	return true;
+}
+//-------------------------------------------------------------------------
 static void usage(const std::string pname)
 {
 	std::cerr << "Usage: " << std::endl << pname << " generate|encode|decode|benchmark" << std::endl;
@@ -518,7 +608,7 @@ static bool process_command(char **argv)
 			rv = encode();
 			break;
 		case fnv1a("dec"):
-			std::cout << "Decode\n"; 
+			rv = decode();
 			break;
 		default:
 			usage(std::string (argv[0]));
