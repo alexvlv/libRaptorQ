@@ -38,14 +38,15 @@
 #include <endian.h>
 
 #include <algorithm>
+#include <cassert>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <random>
 #include <stdlib.h>
 #include <vector>
-#include <cassert>
 
+#include <experimental/filesystem>
 // rename the main namespace for ease of use
 namespace RaptorQ = RaptorQ__v1;
 
@@ -58,6 +59,8 @@ using Symbols = std::vector<Symbol>;
 
 using Encoder = RaptorQ::Encoder<typename Binary::iterator, typename Binary::iterator>;
 using Decoder = RaptorQ::Decoder<typename Binary::iterator, typename Binary::iterator>;
+
+static const std::string fname_base{"raptor_data"};
 
 //-------------------------------------------------------------------------
 // size is bytes.
@@ -409,16 +412,65 @@ static bool bin2file(const std::string fname, const Binary &data)
 	return true;
 }
 //-------------------------------------------------------------------------
+static bool generate()
+{
+   	const uint32_t block_size = BLOCK_SIZE;
+	std::cerr << "Generate random data..." << std::endl;
+	Binary input = generate_random_data(block_size);
+	std::string fname = fname_base + ".bin";
+	std::cerr << "Write random data to [" << fname << "]..." << std::endl;
+	return bin2file(fname,input);
+}
+//-------------------------------------------------------------------------
+static Binary read_bin()
+{
+    const uint32_t block_size = BLOCK_SIZE;
+	std::string fname = fname_base + ".bin";
+
+	std::cerr << "Read data from [" << fname << "]..." << std::endl;
+
+	std::ifstream in_file;
+	in_file.open (fname, std::ios_base::binary | std::ios_base::in);
+	if (!in_file.is_open()) {
+		std::cerr << "ERR: can't open input binary file for reading\n";
+		return Binary{};
+	}
+	
+	size_t fsize = std::experimental::filesystem::file_size(fname);
+	if( fsize > block_size ) {
+		std::cerr << "WARN: binary file larger than block_size:" << fsize << std::endl;
+		fsize = block_size;
+	} else if( fsize < block_size ) {
+		std::cerr << "WARN: binary file shorter than block_size:" << fsize << std::endl;
+	}
+	
+	Binary input (block_size, 0);
+	in_file.read(reinterpret_cast<char *> (input.data()), block_size);
+	size_t read = in_file.gcount();
+	std::cerr << "Read " <<  read << " bytes" << std::endl;
+	in_file.close();
+	bool rv = block_size==read;
+	if(!rv) {
+		std::cerr << "WARN: Read failed:" << read << std::endl;
+	}
+	return rv?input:Binary{};
+}
+//-------------------------------------------------------------------------
 static bool encode()
 {
    	const uint32_t block_size = BLOCK_SIZE;
 	const uint16_t symbol_size = SYMBOL_SIZE;
 
+	std::string data_fname = fname_base + ".bin";
+	
 	std::cerr << "Raptor encode test" << std::endl;
-	std::cerr << "Generate random data..." << std::endl;
-	Binary input = generate_random_data(block_size);
+	if(!std::experimental::filesystem::exists(data_fname) && !generate()){
+		return false;
+	} 
+	Binary input = read_bin();
+	
 	std::cerr << "Write random data to file..." << std::endl;
-	if( !bin2file("raptor_test_data.bin",input)!=0 ) {
+	if( !bin2file(fname_base + ".bin",input)!=0 ) {
 		return false;
 	}
 	
@@ -446,7 +498,7 @@ static bool encode()
 //-------------------------------------------------------------------------
 static void usage(const std::string pname)
 {
-	std::cerr << "Usage: " << std::endl << pname << " encode|decode|benchmark" << std::endl;
+	std::cerr << "Usage: " << std::endl << pname << " generate|encode|decode|benchmark" << std::endl;
 }
 //-------------------------------------------------------------------------
 // https://ru.stackoverflow.com/questions/7920/switch-%D0%B4%D0%BB%D1%8F-string/7924
@@ -462,6 +514,9 @@ static bool process_command(char **argv)
 	switch (fnv1a(cmd.c_str())) {
 		case fnv1a("ben"):
 			rv = benchmark();
+			break;
+		case fnv1a("gen"):
+			rv = generate();
 			break;
 		case fnv1a("enc"):
 			rv = encode();

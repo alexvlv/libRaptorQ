@@ -49,12 +49,12 @@ CFLAGS += -Wall -Wno-unknown-pragmas
 ifeq ($(ARCH),mips)
 	CFLAGS += -Wno-int-in-bool-context
 endif	
-CFLAGS += -DREVISION="$(REVISION)$(MODIFIED) $(BRANCH)" 
-CFLAGS += -DREVDATE="$(REVDATE)"
 
 LIBS=-lpthread
 
-LDFLAGS = -L$(STAGING_DIR)/target-mips_24kc_musl/usr/lib
+LDFLAGS := -lstdc++fs
+LDFLAGS += -L$(STAGING_DIR)/target-mips_24kc_musl/usr/lib
+
 
 SOURCES := $(wildcard   $(addsuffix /*.cpp, $(source_dirs) ) )
 SOURCES += $(wildcard   $(addsuffix /*.c, $(source_dirs) ) )
