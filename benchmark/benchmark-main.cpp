@@ -469,11 +469,6 @@ static bool encode()
 	} 
 	Binary input = read_bin();
 	
-	std::cerr << "Write random data to file..." << std::endl;
-	if( !bin2file(fname_base + ".bin",input)!=0 ) {
-		return false;
-	}
-	
 	RaptorQ__v1::local_cache_size (0);
 	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(block_size,symbol_size);
 	Encoder enc (symbols_per_block, symbol_size);
@@ -488,8 +483,9 @@ static bool encode()
 		return false;
 	}
 	
-	std::cerr << "Write encoded symbols..." << std::endl;
-	if( symbols2file("raptor_test_data." + std::to_string(symbol_size) + ".enc",encoded)!=0 ) {
+	std::string enc_fname = fname_base + "." + std::to_string(symbol_size) + ".enc";
+	std::cerr << "Write encoded to  [" << enc_fname << "]..." << std::endl;
+	if( symbols2file(enc_fname,encoded)!=0 ) {
 		return false;
 	}
 	std::cerr << "Done!" << std::endl;
