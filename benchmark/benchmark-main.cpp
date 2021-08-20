@@ -21,6 +21,9 @@
  * along with libRaptorQ.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define SYMBOL_SIZE 62
+#define BLOCK_SIZE  (40*1024)
+
 #include ".git.h"
 
 #ifndef VERSION
@@ -31,6 +34,9 @@
 #include "RandomDrop.hpp"
 
 #include "../src/RaptorQ/RaptorQ_v1_hdr.hpp"
+
+#include <endian.h>
+
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -341,7 +347,7 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
     return ok;
 }
 //-------------------------------------------------------------------------
-int benchmark()
+static bool benchmark()
 {
     std::cerr << "Raptor benchmark test" << std::endl;
 	// keep some computation in memory. If you use only one block size it
@@ -354,12 +360,88 @@ int benchmark()
     // bytes.
     //std::uniform_int_distribution<uint32_t> distr(100, 10000);
     //uint32_t input_size = distr (rnd);
-	uint32_t input_size = 40*1024;
+	const uint32_t input_size = BLOCK_SIZE;
+	const uint16_t symbol_size = SYMBOL_SIZE;
 
-    if (!test_rq (input_size, 62))
-        return -1;
+    if (!test_rq (input_size, symbol_size))
+        return false;
     std::cerr << "The example completed successfully\n";
-    return 0;
+    return true;
+}
+//-------------------------------------------------------------------------
+namespace std {
+	static std::ostream& operator<<(std::ostream& os, const Symbol &sym)
+	{
+		uint32_t tmp_id_le = htole32(sym.first);
+		os.write(reinterpret_cast<const char *>(&tmp_id_le), sizeof(tmp_id_le));
+		const Binary & data = sym.second;
+		os.write(reinterpret_cast<const char *>(data.data()), data.size());
+		return os;
+	}
+}
+//-------------------------------------------------------------------------
+static bool symbols2file(const std::string fname, const Symbols &data)
+{
+	std::ofstream out_file;
+	out_file.open (fname, std::ios_base::binary | std::ios_base::out | std::ios_base::trunc);
+	if (!out_file.is_open()) {
+		std::cerr << "ERR: can't open output encoded symbols file for writing\n";
+		return false;
+	}
+	std::ostream_iterator<Symbol> out_it (out_file);
+	std::copy(data.begin(),data.end(),out_it);
+	out_file.close();
+	return true;
+}
+//-------------------------------------------------------------------------
+static bool bin2file(const std::string fname, const Binary &data)
+{
+	std::ofstream out_file;
+	out_file.open (fname, std::ios_base::binary | std::ios_base::out
+													| std::ios_base::trunc);
+	if (!out_file.is_open()) {
+		std::cerr << "ERR: can't open output binary file for writing\n";
+		return false;
+	}
+	std::ostream_iterator<uint8_t> out_it (out_file);
+	std::copy(data.begin(),data.end(),out_it);
+	out_file.close();
+	return true;
+}
+//-------------------------------------------------------------------------
+static bool encode()
+{
+   	const uint32_t block_size = BLOCK_SIZE;
+	const uint16_t symbol_size = SYMBOL_SIZE;
+
+	std::cerr << "Raptor encode test" << std::endl;
+	std::cerr << "Generate random data..." << std::endl;
+	Binary input = generate_random_data(block_size);
+	std::cerr << "Write random data to file..." << std::endl;
+	if( !bin2file("raptor_test_data.bin",input)!=0 ) {
+		return false;
+	}
+	
+	RaptorQ__v1::local_cache_size (0);
+	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(block_size,symbol_size);
+	Encoder enc (symbols_per_block, symbol_size);
+
+	
+	Timer time(3);
+	time.start();
+	std::cerr << "Encoding start" << std::endl;
+	Symbols encoded = encode_block(enc,input,10);
+	std::cerr << "Encoded " << encoded.size() << " symbols total, " << time.stop_sec() << " seconds elapsed" << std::endl;
+	if(encoded.size() == 0) {
+		return false;
+	}
+	
+	std::cerr << "Write encoded symbols..." << std::endl;
+	if( symbols2file("raptor_test_data." + std::to_string(symbol_size) + ".enc",encoded)!=0 ) {
+		return false;
+	}
+	std::cerr << "Done!" << std::endl;
+	return true;
 }
 //-------------------------------------------------------------------------
 static void usage(const std::string pname)
@@ -373,16 +455,16 @@ inline constexpr std::uint32_t fnv1a(const char* str, std::uint32_t hash = 21661
     return *str ? fnv1a(str + 1, (hash ^ *str) * 16777619ULL) : hash;
 }
 //-------------------------------------------------------------------------
-static int process_command(char **argv) 
+static bool process_command(char **argv) 
 {
-	int rv = -1;
+	bool rv = false;
 	const std::string cmd = std::string (argv[1]).substr(0,3);
 	switch (fnv1a(cmd.c_str())) {
 		case fnv1a("ben"):
 			rv = benchmark();
 			break;
 		case fnv1a("enc"):
-			std::cout << "Encode\n";
+			rv = encode();
 			break;
 		case fnv1a("dec"):
 			std::cout << "Decode\n"; 
@@ -396,12 +478,12 @@ static int process_command(char **argv)
 int main (int argc, char **argv)
 {
 	std::cerr << "Raptor benchmark " VERSION " Compiled: " __DATE__ " " __TIME__ << std::endl;
-	int rv = -1;
+	bool rv =  false;
 	if(argc>1) {
 		rv = process_command(argv);
 	} else {
 		usage(std::string (argv[0]));
 	}
-	return rv;
+	return rv?0:1;
 }
 //-------------------------------------------------------------------------
