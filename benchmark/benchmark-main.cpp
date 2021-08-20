@@ -47,9 +47,12 @@
 #include <vector>
 
 #include <experimental/filesystem>
+namespace std {
+	namespace filesystem = experimental::filesystem;
+}
+
 // rename the main namespace for ease of use
 namespace RaptorQ = RaptorQ__v1;
-
 using Binary = std::vector<uint8_t>;
 using symbol_id = uint32_t; // just a better name
 // we will store here all encoded and transmitted symbols
@@ -449,7 +452,7 @@ static Binary read_bin()
 		return Binary{};
 	}
 	
-	size_t fsize = std::experimental::filesystem::file_size(fname);
+	size_t fsize = std::filesystem::file_size(fname);
 	if( fsize > block_size ) {
 		std::cerr << "WARN: binary file larger than block_size:" << fsize << std::endl;
 		fsize = block_size;
@@ -477,7 +480,7 @@ static bool encode()
 	std::string data_fname = fname_base + ".bin";
 	
 	std::cerr << "Raptor encode test" << std::endl;
-	if(!std::experimental::filesystem::exists(data_fname) && !generate()){
+	if(!std::filesystem::exists(data_fname) && !generate()){
 		return false;
 	} 
 	Binary input = read_bin();
