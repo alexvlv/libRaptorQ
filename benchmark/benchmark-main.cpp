@@ -126,9 +126,9 @@ static Symbols encode_block(Encoder &enc, Binary &input, uint32_t drop_probabili
     uint16_t num_symbols = enc.symbols();
 	auto real_size = symbol_size * num_symbols;
     std::cerr << "Encode Input block size: " << input.size() 
-		<< " symbols: " <<  static_cast<uint32_t> (num_symbols) 
+		<< " data symbols: " <<  static_cast<uint32_t> (num_symbols) 
 		<< " symbol size: " << static_cast<int32_t>(symbol_size) 
-		<< " Real block size: " << real_size
+		<< " Real data block size: " << real_size
 		<< std::endl;
     if (!enc.compute_sync()) {
         // if this happens it's a bug in the library.
@@ -229,6 +229,7 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size = 0
     std::cerr << "Decode " << received.size() << " symbols from " 
 		<< static_cast<uint32_t> (num_symbols) 
 		<< ", symbol size: " << static_cast<int32_t>(symbol_size)
+		<< ", Real data size: " << static_cast<int32_t>(symbol_size)
 		<< " Data size: " << data_size
 		<< std::endl;
     // now push every received symbol into the decoder
@@ -285,9 +286,7 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size = 0
 	// now save the decoded data in our output
 	size_t decode_from_byte = 0;
 	size_t skip_bytes_at_begining_of_output = 0;
-	if( data_size > 0 ) {
-		decoded.resize(data_size,0);
-	}
+	decoded.resize(data_size>0?data_size:(symbol_size*num_symbols),0);
     auto out_it = decoded.begin();
     auto decode_result = dec.decode_bytes (out_it, decoded.end(), decode_from_byte, skip_bytes_at_begining_of_output);
     // "decode_from_byte" can be used to have only a part of the output.
@@ -419,12 +418,13 @@ static bool bin2file(const std::string fname, const Binary &data)
 	out_file.open (fname, std::ios_base::binary | std::ios_base::out
 													| std::ios_base::trunc);
 	if (!out_file.is_open()) {
-		std::cerr << "ERR: can't open output binary file for writing\n";
+		std::cerr << "ERR: can't open output binary file [" << fname << "] for writing\n";
 		return false;
 	}
 	std::ostream_iterator<uint8_t> out_it (out_file);
 	std::copy(data.begin(),data.end(),out_it);
 	out_file.close();
+	std::cerr << "Writing " << data.size() << " bytes to [" << fname << "] done" << std::endl;
 	return true;
 }
 //-------------------------------------------------------------------------
@@ -438,10 +438,9 @@ static bool generate()
 	return bin2file(fname,input);
 }
 //-------------------------------------------------------------------------
-static Binary read_bin()
+static Binary read_bin(const std::string &fname)
 {
     const uint32_t block_size = BLOCK_SIZE;
-	std::string fname = fname_base + ".bin";
 
 	std::cerr << "Read data from [" << fname << "]..." << std::endl;
 
@@ -483,7 +482,10 @@ static bool encode()
 	if(!std::filesystem::exists(data_fname) && !generate()){
 		return false;
 	} 
-	Binary input = read_bin();
+	Binary input = read_bin(data_fname);
+	if(input.empty()) {
+		return false;
+	}
 	
 	RaptorQ__v1::local_cache_size (0);
 	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(block_size,symbol_size);
@@ -576,13 +578,28 @@ static bool decode()
 	std::cerr << "Decoding start" << std::endl;
 	Timer time(3);
 	time.start();
-	Binary decoded = decode_block(dec,encoded);
+	Binary decoded = decode_block(dec,encoded,block_size);
+	std::cerr << "Decoded " << encoded.size() << " symbols total, decoded size :" << decoded.size() << " bytes, " 
+		<< time.stop_sec() << " seconds elapsed" << std::endl;
 	if(decoded.empty()) {
 		return false;
 	}
-	std::cerr << "Decoded " << encoded.size() << " symbols total, " << time.stop_sec() << " seconds elapsed" << std::endl;
-
-
+	std::string out_fname = fname_base + "." + std::to_string(symbol_size) + ".dec.bin";
+	std::cerr << "Write decoded binary to [" << out_fname << "]..." << std::endl;
+	if(!bin2file(out_fname,decoded)) {
+		return false;
+	}
+	std::string data_fname = fname_base + ".bin";
+	if(std::filesystem::exists(data_fname)){
+		std::cerr << "Compare decoded data..." << std::endl;
+		Binary input = read_bin(data_fname);
+		if(input.empty()) {
+			return false;
+		}
+		bool ok = std::equal(input.begin(),input.end(),decoded.begin());
+		std::cerr << "Compare result: " << (ok?"OK":"FAILED!") << std::endl << std::endl;
+		return ok;
+	} 
 	return true;
 }
 //-------------------------------------------------------------------------
