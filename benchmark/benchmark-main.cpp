@@ -238,7 +238,7 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size = 0
         //  rec_sym.first = symbol_id (uint32_t)
         //  rec_sym.second = std::vector<uint8_t> symbol_data
         symbol_id tmp_id = rec_sym.first;
-		std::cerr << "Dec #" << std::dec << cnt++
+		false && std::cerr << "Dec #" << std::dec << cnt++
 			<< " id: " << tmp_id << " data: " << rec_sym.second.size() << " " 
 			<< std::hex 
 			<< std::setfill('0') << std::setw(16) 
@@ -314,7 +314,6 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size = 0
 	return decoded;
 }
 //-------------------------------------------------------------------------
-// mysize is bytes.
 // the "overhead" variable tells us how many symbols more than the
 // minimum we will generate. RaptorQ can not always decode a block,
 // but there is a small probability that it will fail.
@@ -324,9 +323,20 @@ static Binary decode_block(Decoder &dec, Symbols &received, size_t data_size = 0
 //  overhead 2 => 0.0001% failures
 // etc... as you can see, it make little sense to work with more than 3-4
 // overhead symbols, but at least one should be considered
-bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
+//-------------------------------------------------------------------------
+static bool benchmark()
 {
-	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(mysize,symbol_size);
+    std::cerr << "Raptor benchmark test" << std::endl;
+	// keep some computation in memory. If you use only one block size it
+    // will make things faster on bigger block size.
+    // allocate 5Mb
+    //RaptorQ__v1::local_cache_size (5000000);
+	RaptorQ__v1::local_cache_size (0);
+
+	const uint32_t input_size = BLOCK_SIZE;
+	const uint16_t symbol_size = SYMBOL_SIZE;
+	
+	RaptorQ::Block_Size symbols_per_block = calc_symbols_per_block(input_size,symbol_size);
 
     Timer time(3);
 	bool ok = false;
@@ -335,7 +345,7 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
 		Decoder dec (symbols_per_block, symbol_size, Decoder::Report::COMPLETE);
 		ok = false;
 		std::cerr << "Generate random data..." << std::endl;
-		Binary input = generate_random_data(mysize);
+		Binary input = generate_random_data(input_size);
 #if 0
 		std::cerr << "Precompute start" << std::endl;
 		time.start();
@@ -352,7 +362,7 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
 		//Symbols received = reduction(encoded,enc.symbols(),20);
 		std::cerr << "Decoding start" << std::endl;
 		time.start();
-		Binary decoded = decode_block(dec,encoded,mysize);
+		Binary decoded = decode_block(dec,encoded,input_size);
 		if(decoded.empty()) {
 			break;
 		}
@@ -363,38 +373,28 @@ bool test_rq (const uint32_t mysize, const uint16_t symbol_size)
 			break;
 		}
 	}
-    return ok;
-}
-//-------------------------------------------------------------------------
-static bool benchmark()
-{
-    std::cerr << "Raptor benchmark test" << std::endl;
-	// keep some computation in memory. If you use only one block size it
-    // will make things faster on bigger block size.
-    // allocate 5Mb
-    //RaptorQ__v1::local_cache_size (5000000);
-	RaptorQ__v1::local_cache_size (0);
-
-    // for our test, we use an input of random size, between 100 and 10.000
-    // bytes.
-    //std::uniform_int_distribution<uint32_t> distr(100, 10000);
-    //uint32_t input_size = distr (rnd);
-	const uint32_t input_size = BLOCK_SIZE;
-	const uint16_t symbol_size = SYMBOL_SIZE;
-
-    if (!test_rq (input_size, symbol_size))
-        return false;
-    std::cerr << "The example completed successfully\n";
-    return true;
+    return ok;	
 }
 //-------------------------------------------------------------------------
 namespace std {
 	static std::ostream& operator<<(std::ostream& os, const Symbol &sym)
 	{
-		uint32_t tmp_id_le = htole32(sym.first);
+		//uint32_t tmp_id_le = htole32(sym.first);
+		uint32_t tmp_id_le = sym.first;
 		os.write(reinterpret_cast<const char *>(&tmp_id_le), sizeof(tmp_id_le));
 		const Binary & data = sym.second;
 		os.write(reinterpret_cast<const char *>(data.data()), data.size());
+		static int cnt = 0;
+		false && std::cerr << "Dec #" << std::dec << cnt++
+			<< " id: " << sym.first << " data: " << sym.second.size() << " " 
+			<< std::hex 
+			<< std::setfill('0') << std::setw(16) 
+			<< *reinterpret_cast<const uint64_t*>(sym.second.data())
+			<< std::setfill('0') << std::setw(16)
+			<< *reinterpret_cast<const uint64_t*>(sym.second.data()+sizeof(uint64_t)) 
+			<< std::setfill('0') << std::setw(16)
+			<< *reinterpret_cast<const uint64_t*>(sym.second.data()+sizeof(uint64_t)*2) 
+			<< std::endl;
 		return os;
 	}
 }
@@ -521,10 +521,11 @@ namespace std {
 			std::cerr << "WARN: incomplete ID, gcount: " << is.gcount() << "!" << std::endl;
 			return is;
 		}
-		sym.first = letoh32(tmp_id_le);
+		//sym.first = letoh32(tmp_id_le);
+		sym.first = tmp_id_le;
 		Binary source_sym_data (symbol_size, 0);
 		is.read (reinterpret_cast<char *> (source_sym_data.data()), source_sym_data.size());
-        if (is.eof() || is.gcount() != source_sym_data.size()) {
+        if (is.eof() || static_cast<size_t>(is.gcount()) != source_sym_data.size()) {
 			std::cerr << "WARN: incomplete symbol!" << std::endl;
 			return is;
 		}
@@ -616,6 +617,7 @@ static bool process_command(char **argv)
 		default:
 			usage(std::string (argv[0]));
 	}
+	rv && std::cerr << "The example completed successfully\n";
 	return rv;
 }
 //-------------------------------------------------------------------------
