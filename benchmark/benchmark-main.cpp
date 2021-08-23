@@ -378,8 +378,7 @@ static bool benchmark()
 namespace std {
 	static std::ostream& operator<<(std::ostream& os, const Symbol &sym)
 	{
-		//uint32_t tmp_id_le = htole32(sym.first);
-		uint32_t tmp_id_le = sym.first;
+		uint32_t tmp_id_le = htole32(sym.first);
 		os.write(reinterpret_cast<const char *>(&tmp_id_le), sizeof(tmp_id_le));
 		const Binary & data = sym.second;
 		os.write(reinterpret_cast<const char *>(data.data()), data.size());
@@ -523,8 +522,7 @@ namespace std {
 			std::cerr << "WARN: incomplete ID, gcount: " << is.gcount() << "!" << std::endl;
 			return is;
 		}
-		//sym.first = letoh32(tmp_id_le);
-		sym.first = tmp_id_le;
+		sym.first = le32toh(tmp_id_le);
 		Binary source_sym_data (symbol_size, 0);
 		is.read (reinterpret_cast<char *> (source_sym_data.data()), source_sym_data.size());
         if (is.eof() || static_cast<size_t>(is.gcount()) != source_sym_data.size()) {
